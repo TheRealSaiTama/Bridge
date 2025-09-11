@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Absolute paths to Node and CLIs
+NODE="/home/therealsaitama/.nvm/versions/node/v20.19.4/bin/node"
+GEM_JS="/home/therealsaitama/.nvm/versions/node/v20.19.4/lib/node_modules/@google/gemini-cli/dist/index.js"
+QWEN_JS="/home/therealsaitama/.nvm/versions/node/v20.19.4/lib/node_modules/@qwen-code/qwen-code/dist/index.js"
+
+# Pass-through: if user supplies flags (help/version/interactive/etc.), delegate to real Gemini.
+if [[ "$#" -eq 0 || "$1" == "-"* ]]; then
+  exec "$NODE" "$GEM_JS" "$@"
+fi
+
+USER_PROMPT="$*"
+echo "[bridge] gemini↔qwen iterative loop (tools enabled, yolo approvals)"
+
+# Config
+MAX_LOOPS=${BRIDGE_MAX_LOOPS:-8}
+QUALITY=${BRIDGE_QUALITY:-polished}   # options: basic|polished
+UI_TARGET=${BRIDGE_UI:-tkinter}       # options: tkinter|web
+
+# Build a UI quality rubric to push for better results
+RUBRIC=$'UI quality rubric ('"$UI_TARGET"$'):\n'
+if [[ "$UI_TARGET" == "web" ]]; then
+  RUBRIC+=$'- Clean, modern layout with CSS variables, consistent 8px spacing.\n'
+  RUBRIC+=$'- Single HTML file (plus CSS/JS) or embed CSS/JS; responsive center card.\n'
+  RUBRIC+=$'- Clear display area, large buttons, keyboard shortcuts (0-9, + - * /, Enter, Backspace).\n'
+  RUBRIC+=$'- Error handling (invalid input, divide by zero) with non-intrusive message.\n'
+  RUBRIC+=$'- No external CDN dependencies; work fully offline.\n'
+else
+  RUBRIC+=$'- Use ttk themed widgets; visually clean, consistent 8px padding and grid alignment.\n'
+  RUBRIC+=$'- Large display label/entry, legible font; buttons sized uniformly with spacing.\n'
+  RUBRIC+=$'- Keyboard shortcuts (0-9, + - * /, Enter/=, Backspace), and Esc to clear.\n'
+  RUBRIC+=$'- Handle errors (invalid expression, divide by zero) gracefully.\n'
+  RUBRIC+=$'- Self-contained single file runnable with python3, no third-party deps.\n'
+fi
+if [[ "$QUALITY" == "polished" ]]; then
+  RUBRIC+=$'- Aesthetics matter: avoid cramped or noisy visuals; use subtle colors.\n'
+fi
+
+# Temp files
+GEM_TMP=$(mktemp)
+QWEN_TMP=$(mktemp)
+EVAL_TMP=$(mktemp)
+
+cleanup() {
+  rm -f "$GEM_TMP" "$QWEN_TMP" "$EVAL_TMP"
+}
+trap cleanup EXIT
+
+# Helpers: extract fenced JSON and read a field
+extract_json() {
+  "$NODE" -e '
+    const fs = require("fs");
+    let t = fs.readFileSync(0, "utf8");
+    let m = t.match(/```json\n([\s\S]*?)\n```/);
+    if (m) t = m[1];
+    const s = t.indexOf("{"), e = t.lastIndexOf("}");
+    if (s >= 0 && e > s) t = t.slice(s, e + 1);
+    try { const o = JSON.parse(t); process.stdout.write(JSON.stringify(o)); }
+    catch { process.stdout.write("{}"); }
+  '
+}
+
+json_field() {
+  local FIELD="$1"
+  "$NODE" -e "
+    const fs=require('fs');
+    const o=JSON.parse(fs.readFileSync(0,'utf8'));
+    let v=o['$FIELD'];
+    if(typeof v==='boolean') process.stdout.write(v? 'true':'false');
+    else if(v==null) process.stdout.write('');
+    else process.stdout.write(String(v));
+  "
+}
+
+# System prompts/templates
+QWEN_SYS=$(cat <<'EOF'
+You are collaborating with another assistant (Gemini).
+- You will receive the original user request and Gemini's current reply.
+- Add your specialized contribution:
+  - For code-heavy tasks, produce complete, runnable code (single file when reasonable) in one fenced block and concise run steps.
+  - For conceptual tasks, add technical improvements, examples, or corrections.
+- Be concise; avoid repeating environment/noise lines.
+EOF
+)
+
+GEM_EVAL_SYS=$(cat <<'EOF'
+You are the final arbiter collaborating with Qwen.
+Return ONLY a JSON object fenced as ```json with fields:
+- satisfied: boolean — true if the current combined answer is ready to deliver.
+- best_answer: string — the answer to show the user now.
+- evaluation_notes: string — brief reason for your decision.
+- actions: optional array of file-system actions to apply locally. Each is one of:
+  - {"op":"mkdir_p","path":"/home/USER/demo"}
+  - {"op":"write_file","path":"/home/USER/demo/index.html","content":"..."}
+  - {"op":"remove","path":"/home/USER/demo/tmp"}
+Given the user request, your current reply, and Qwen's contribution: integrate improvements directly.
+If satisfied=false, best_answer must contain your improved next attempt to iterate on.
+CRITICAL CONSTRAINTS:
+- Do NOT invoke tools. Only return the JSON as specified.
+- Prefer creating files under the user's home directory.
+EOF
+)
+
+# 1) Initial Gemini pass (no tools; include rubric to seed expectations)
+echo "[bridge] Gemini pass #1 (no tools; propose)"
+"$NODE" "$GEM_JS" --approval-mode yolo --allowed-tools "" --allowed-mcp-server-names "" -p "$USER_PROMPT
+
+Design/quality requirements to respect:
+${RUBRIC}" 2>/dev/null > "$GEM_TMP" || true
+GEM_OUT=$(cat "$GEM_TMP")
+
+ITER=1
+while (( ITER <= MAX_LOOPS )); do
+  echo "[bridge] Loop $ITER: sending to Qwen"
+
+  QWEN_PROMPT="${QWEN_SYS}
+
+User request:
+${USER_PROMPT}
+
+Gemini's current reply:
+${GEM_OUT}
+
+Design/quality rubric to follow strictly:
+${RUBRIC}"
+
+  "$NODE" "$QWEN_JS" --allowed-mcp-server-names "" -p "$QWEN_PROMPT" 2>/dev/null > "$QWEN_TMP" || true
+  QWEN_OUT=$(cat "$QWEN_TMP")
+
+  echo "[bridge] Loop $ITER: Gemini evaluating + proposing actions (no tools)"
+  EVAL_PROMPT="${GEM_EVAL_SYS}
+
+User request:
+${USER_PROMPT}
+
+Your current reply:
+${GEM_OUT}
+
+Qwen's contribution:
+${QWEN_OUT}
+
+Design/quality rubric (must be satisfied before setting satisfied=true):
+${RUBRIC}"
+
+  "$NODE" "$GEM_JS" --approval-mode yolo --allowed-tools "" --allowed-mcp-server-names "" -p "$EVAL_PROMPT" 2>/dev/null > "$EVAL_TMP" || true
+  EVAL_RAW=$(cat "$EVAL_TMP")
+  EVAL_JSON=$(printf '%s' "$EVAL_RAW" | extract_json)
+
+  SAT=$(printf '%s' "$EVAL_JSON" | json_field satisfied || true)
+  BEST=$(printf '%s' "$EVAL_JSON" | json_field best_answer || true)
+  NOTE=$(printf '%s' "$EVAL_JSON" | json_field evaluation_notes || true)
+
+  # Fallbacks if parsing failed
+  if [[ -z "$BEST" ]]; then
+    BEST="$EVAL_RAW"
+  fi
+
+  # Apply any proposed actions safely under $HOME
+  printf '%s' "$EVAL_JSON" | "$NODE" -e '
+    const fs = require("fs");
+    const path = require("path");
+    const home = process.env.HOME || require("os").homedir();
+    const o = JSON.parse(fs.readFileSync(0, "utf8"));
+    const acts = Array.isArray(o.actions) ? o.actions : [];
+    const ensureSafe = (p) => {
+      const abs = path.resolve(p);
+      const safeRoot = home.endsWith(path.sep) ? home : home + path.sep;
+      if (!abs.startsWith(safeRoot)) {
+        throw new Error(`Refusing to modify outside home: ${abs}`);
+      }
+      return abs;
+    };
+    for (const a of acts) {
+      try {
+        if (!a || typeof a !== "object") continue;
+        const op = a.op;
+        if (op === "mkdir_p") {
+          const p = ensureSafe(a.path);
+          fs.mkdirSync(p, { recursive: true });
+          process.stdout.write(`[bridge] MKDIR  ${p}\n`);
+        } else if (op === "write_file") {
+          const p = ensureSafe(a.path);
+          fs.mkdirSync(path.dirname(p), { recursive: true });
+          fs.writeFileSync(p, a.content ?? "", "utf8");
+          process.stdout.write(`[bridge] WRITE  ${p} (${(a.content||"").length} bytes)\n`);
+        } else if (op === "remove") {
+          const p = ensureSafe(a.path);
+          fs.rmSync(p, { recursive: true, force: true });
+          process.stdout.write(`[bridge] REMOVE ${p}\n`);
+        }
+      } catch (err) {
+        process.stdout.write(`[bridge] ACTION ERROR: ${err.message}\n`);
+      }
+    }
+  ' || true
+
+  if [[ "$SAT" == "true" ]]; then
+    echo "[bridge] Satisfied ✔ — $NOTE"
+    echo ""
+    echo "=================================================="
+    echo "🎯 ULTIMATE ANSWER (Gemini + Qwen Collaboration)"
+    echo "=================================================="
+    printf '%s\n' "$BEST"
+    exit 0
+  else
+    echo "[bridge] Not satisfied yet — ${NOTE:-no note}. Iterating..."
+    GEM_OUT="$BEST"
+  fi
+
+  ITER=$((ITER + 1))
+done
+
+echo "[bridge] Reached max loops ($MAX_LOOPS). Returning latest best attempt."
+echo ""
+echo "=================================================="
+echo "🎯 BEST-ATTEMPT ANSWER (loop cap reached)"
+echo "=================================================="
+printf '%s\n' "$GEM_OUT"
+exit 0
