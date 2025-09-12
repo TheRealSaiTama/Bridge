@@ -2,9 +2,9 @@
 set -Eeuo pipefail
 
 # Absolute paths to Node and CLIs
-NODE="/home/therealsaitama/.nvm/versions/node/v20.19.4/bin/node"
-GEM_JS="/home/therealsaitama/.nvm/versions/node/v20.19.4/lib/node_modules/@google/gemini-cli/dist/index.js"
-QWEN_JS="/home/therealsaitama/.nvm/versions/node/v20.19.4/lib/node_modules/@qwen-code/qwen-code/dist/index.js"
+NODE="ENTER NODE INFO"
+GEM_JS="/home/<YOUR SYS NAME>/.nvm/versions/node/v20.19.4/lib/node_modules/@google/gemini-cli/dist/index.js"
+QWEN_JS="/home/<YOUR SYS NAME>/.nvm/versions/node/v20.19.4/lib/node_modules/@qwen-code/qwen-code/dist/index.js"
 
 # Pass-through: if user supplies flags (help/version/interactive/etc.), delegate to real Gemini.
 if [[ "$#" -eq 0 || "$1" == "-"* ]]; then
