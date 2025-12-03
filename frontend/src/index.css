@@ -1,0 +1,192 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Base styles */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background: #FAFAFA;
+  color: #18181B;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+/* Dark mode */
+.dark body {
+  background: #09090B;
+  color: #FAFAFA;
+}
+
+/* Scrollbar - minimal */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D4D4D8;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #A1A1AA;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #3F3F46;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #52525B;
+}
+
+/* Selection */
+::selection {
+  background: #DBEAFE;
+  color: #1E3A8A;
+}
+
+.dark ::selection {
+  background: #1E3A8A;
+  color: #DBEAFE;
+}
+
+/* Utility classes */
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+/* Focus ring */
+*:focus-visible {
+  outline: 2px solid #2563EB;
+  outline-offset: 2px;
+}
+
+/* Card styles */
+.card {
+  background: white;
+  border: 1px solid #E4E4E7;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.04);
+}
+
+.dark .card {
+  background: #18181B;
+  border-color: #27272A;
+}
+
+/* Shimmer effect for skeleton loading */
+.shimmer {
+  position: relative;
+  overflow: hidden;
+  background: #F4F4F5;
+}
+
+.dark .shimmer {
+  background: #27272A;
+}
+
+.shimmer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.4),
+    transparent
+  );
+  animation: shimmer 2s infinite;
+}
+
+.dark .shimmer::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.1),
+    transparent
+  );
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Code block base */
+pre, code {
+  font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+}
+
+/* Badge styles */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 9999px;
+}
+
+.badge-success {
+  background: #DCFCE7;
+  color: #166534;
+}
+
+.badge-warning {
+  background: #FEF3C7;
+  color: #92400E;
+}
+
+.badge-info {
+  background: #DBEAFE;
+  color: #1E40AF;
+}
+
+.badge-neutral {
+  background: #F4F4F5;
+  color: #52525B;
+}
+
+.dark .badge-success {
+  background: #166534;
+  color: #DCFCE7;
+}
+
+.dark .badge-warning {
+  background: #92400E;
+  color: #FEF3C7;
+}
+
+.dark .badge-info {
+  background: #1E40AF;
+  color: #DBEAFE;
+}
+
+.dark .badge-neutral {
+  background: #27272A;
+  color: #A1A1AA;
+}

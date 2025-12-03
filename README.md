@@ -1,11 +1,13 @@
-# 🌉 Bridge: AI Collaboration Framework
+# 🌉 Bridge: Heterogeneous Multi-Agent Cognitive Architecture
+### Development of a Collaborative Code Synthesis Framework
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![AI Collaboration](https://img.shields.io/badge/AI-collaboration-orange)](#)
-[![Gemini + Qwen](https://img.shields.io/badge/Gemini-Qwen-green)](#)
+[![Project Status](https://img.shields.io/badge/Status-Bloom's%20Level%206-blue)](https://github.com/therealsaitama/Bridge)
+[![Agents](https://img.shields.io/badge/Agents-Gemini%20%7C%20Qwen-green)](https://github.com/therealsaitama/Bridge)
 
-**Bridge** is a revolutionary tool that enables collaborative problem-solving between Google's Gemini and Qwen AI models. It creates an iterative loop where both models work together to produce higher quality outputs than either could achieve alone.
+## 📄 Abstract
+Current Large Language Models (LLMs) often suffer from hallucination and logical inconsistencies when generating complex code in a single-shot inference. This project, **"Bridge,"** addresses these limitations by **synthesizing** a dual-agent cognitive architecture where disparate AI models collaborate to refine output. By **orchestrating** a dialogue between a "Generator Agent" (Google Gemini) and a "Critique Agent" (Qwen), the system establishes an autonomous feedback loop for iterative error correction. The project involves **constructing** a robust backend pipeline that normalizes distinct API schemas and **developing** a responsive frontend interface for real-time observation of inter-agent negotiation.
 
+---
 ## 🚀 What is Bridge?
 
 Bridge acts as a mediator between two powerful AI systems, facilitating a conversation loop where:
