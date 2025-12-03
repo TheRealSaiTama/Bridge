@@ -4,15 +4,43 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/bridge.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#FAFAFA" />
+    <meta name="theme-color" content="#FAFAFA" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)" />
     <meta name="description" content="Bridge - Multi-Agent Orchestration Platform" />
     
-    <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     
     <title>Bridge | Multi-Agent Orchestration</title>
+    
+    <script>
+      (function() {
+        try {
+          const stored = localStorage.getItem('bridge-settings');
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            const state = parsed.state || parsed;
+            if (state.isDarkMode === true || 
+                (state.settings?.theme === 'dark') ||
+                (state.settings?.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+              document.documentElement.classList.add('dark');
+            }
+          } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (e) {
+          if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.classList.add('dark');
+          }
+        }
+      })();
+    </script>
+    
+    <style>
+      html { background-color: #fafafa; }
+      html.dark { background-color: #09090b; }
+    </style>
   </head>
   <body>
     <div id="root"></div>

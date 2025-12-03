@@ -10,7 +10,9 @@ import {
   CheckCircle2,
   XCircle,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  Activity,
+  RefreshCw
 } from 'lucide-react';
 import { usePlatformStore } from '../store';
 import { DiscoveredAgent } from '../types';
@@ -33,13 +35,14 @@ function AgentCard({ agent }: { agent: DiscoveredAgent }) {
   const { addPipelineStep } = usePlatformStore();
   const Icon = iconMap[agent.icon] || Sparkles;
   const colorClass = colorMap[agent.color] || colorMap.indigo;
+  const flagCount = Object.keys(agent.detectedFlags || {}).length;
 
   return (
     <div 
       className={`p-3 rounded-lg border transition-all cursor-pointer ${
         agent.isAvailable 
-          ? 'border-zinc-200 dark:border-zinc-700 hover:border-zinc-300 dark:hover:border-zinc-600 hover:shadow-sm' 
-          : 'border-zinc-100 dark:border-zinc-800 opacity-50'
+          ? 'border-zinc-200 dark:border-zinc-700 hover:border-zinc-300 dark:hover:border-zinc-600 hover:shadow-sm bg-white dark:bg-zinc-800/50' 
+          : 'border-zinc-100 dark:border-zinc-800 opacity-50 bg-zinc-50 dark:bg-zinc-900'
       }`}
       onClick={() => agent.isAvailable && addPipelineStep(agent.id, agent.defaultRoles[0] || 'generator')}
     >
@@ -56,7 +59,24 @@ function AgentCard({ agent }: { agent: DiscoveredAgent }) {
               <XCircle className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
             )}
           </div>
-          <p className="text-xs text-zinc-500 truncate mt-0.5">{agent.description}</p>
+          
+          <div className="flex items-center gap-2 mt-1">
+            {agent.version && (
+              <span className="text-xs text-zinc-400">v{agent.version}</span>
+            )}
+            {agent.sessionState === 'ready' && (
+              <span className="flex items-center gap-1 text-xs text-emerald-500">
+                <Activity className="w-3 h-3" />
+                ready
+              </span>
+            )}
+          </div>
+          
+          {flagCount > 0 && (
+            <p className="text-xs text-zinc-500 mt-1">
+              {flagCount} flags detected
+            </p>
+          )}
         </div>
       </div>
     </div>
@@ -71,11 +91,13 @@ export function Sidebar() {
     createSession, 
     deleteSession,
     discoveredAgents,
+    fetchAgents,
     connect
   } = usePlatformStore();
 
   const [sessionsOpen, setSessionsOpen] = useState(true);
   const [agentsOpen, setAgentsOpen] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const handleCreateSession = async () => {
     const session = await createSession();
@@ -86,6 +108,14 @@ export function Sidebar() {
     setActiveSession(sessionId);
     connect(sessionId);
   };
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await fetchAgents();
+    setIsRefreshing(false);
+  };
+
+  const availableCount = discoveredAgents.filter(a => a.isAvailable).length;
 
   return (
     <aside className="h-full flex flex-col bg-white dark:bg-zinc-900 border-r border-zinc-200 dark:border-zinc-800">
@@ -137,13 +167,23 @@ export function Sidebar() {
         </div>
 
         <div className="p-3 border-t border-zinc-100 dark:border-zinc-800">
-          <button
-            onClick={() => setAgentsOpen(!agentsOpen)}
-            className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-zinc-500 uppercase tracking-wider hover:text-zinc-700 dark:hover:text-zinc-300"
-          >
-            {agentsOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-            Agent Library
-          </button>
+          <div className="flex items-center justify-between">
+            <button
+              onClick={() => setAgentsOpen(!agentsOpen)}
+              className="flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-zinc-500 uppercase tracking-wider hover:text-zinc-700 dark:hover:text-zinc-300"
+            >
+              {agentsOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+              CLI Agents
+            </button>
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+              title="Refresh agents"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-zinc-400 ${isRefreshing ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
           
           {agentsOpen && (
             <div className="mt-2 space-y-2">
@@ -153,7 +193,7 @@ export function Sidebar() {
               
               {discoveredAgents.length === 0 && (
                 <p className="text-xs text-zinc-400 text-center py-4">
-                  No agents discovered
+                  No CLI agents found
                 </p>
               )}
             </div>
@@ -163,10 +203,9 @@ export function Sidebar() {
 
       <div className="p-3 border-t border-zinc-100 dark:border-zinc-800">
         <div className="text-xs text-zinc-400 text-center">
-          {discoveredAgents.filter(a => a.isAvailable).length} / {discoveredAgents.length} agents available
+          {availableCount} / {discoveredAgents.length} agents active
         </div>
       </div>
     </aside>
   );
 }
-

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from config import settings, get_quality_rubric
 from models import AgentType, EventType, BridgeEvent, PipelineStepConfig
+from services.cli_session import cli_manager
 
 
 class BridgeOrchestrator:
@@ -16,40 +17,7 @@ class BridgeOrchestrator:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(logging.INFO)
         self.registry = registry
-        self.node_path = settings.NODE_PATH
-        self.gemini_cli = settings.GEMINI_CLI_PATH
-        self.qwen_cli = settings.QWEN_CLI_PATH
         self.timeout = settings.SUBPROCESS_TIMEOUT
-        self._verify_paths()
-    
-    def _verify_paths(self):
-        if not Path(self.node_path).exists():
-            self.logger.warning(f"Node.js not found at {self.node_path}")
-        if not Path(self.gemini_cli).exists():
-            self.logger.warning(f"Gemini CLI not found at {self.gemini_cli}")
-        if not Path(self.qwen_cli).exists():
-            self.logger.warning(f"Qwen CLI not found at {self.qwen_cli}")
-    
-    def _get_env(self) -> dict:
-        env = os.environ.copy()
-        node_dir = str(Path(self.node_path).parent)
-        if node_dir not in env.get("PATH", ""):
-            env["PATH"] = f"{node_dir}:{env.get('PATH', '')}"
-        return env
-    
-    def _get_agent_path(self, agent_id: str) -> Optional[str]:
-        agent_map = {
-            "gemini": self.gemini_cli,
-            "qwen": self.qwen_cli,
-        }
-        if agent_id.lower() in agent_map:
-            return agent_map[agent_id.lower()]
-        
-        if self.registry:
-            agent_info = self.registry.get_agent(agent_id.lower())
-            if agent_info and agent_info.is_available:
-                return agent_info.path
-        return None
     
     def _get_agent_type(self, agent_id: str) -> AgentType:
         type_map = {
@@ -60,54 +28,19 @@ class BridgeOrchestrator:
         }
         return type_map.get(agent_id.lower(), AgentType.DYNAMIC)
     
-    def _get_node_path(self, agent_id: str) -> str:
-        if self.registry:
-            agent_info = self.registry.get_agent(agent_id.lower())
-            if agent_info and agent_info.node_path:
-                return agent_info.node_path
-        return self.node_path
-    
-    def _build_cmd_args(
-        self,
-        agent_id: str,
-        script_path: str,
-        prompt: str,
-        step_settings: Dict[str, Any] = None
-    ) -> List[str]:
-        node = self._get_node_path(agent_id)
-        cmd_args = [node, script_path]
-        
-        if agent_id.lower() == "gemini":
-            cmd_args.extend(["--approval-mode", "yolo", "--allowed-tools", "", "-p", prompt])
-        elif agent_id.lower() == "qwen":
-            cmd_args.extend(["--allowed-mcp-server-names", "", "-p", prompt])
-        elif agent_id.lower() == "claude":
-            cmd_args.extend(["-p", prompt])
-            if step_settings:
-                if "temperature" in step_settings:
-                    cmd_args.extend(["--temperature", str(step_settings["temperature"])])
-                if "maxTokens" in step_settings:
-                    cmd_args.extend(["--max-tokens", str(step_settings["maxTokens"])])
-        else:
-            cmd_args.extend(["-p", prompt])
-        
-        return cmd_args
-    
     async def _run_agent(
         self,
         agent_id: str,
         prompt: str,
-        step_settings: Dict[str, Any] = None,
-        extra_args: Optional[list] = None
     ) -> AsyncGenerator[BridgeEvent, None]:
         agent_type = self._get_agent_type(agent_id)
-        script_path = self._get_agent_path(agent_id)
         
-        if not script_path or not Path(script_path).exists():
+        session = cli_manager.get_session(agent_id.lower())
+        if not session:
             yield BridgeEvent(
                 agent=AgentType.SYSTEM,
                 type=EventType.ERROR,
-                content=f"Agent '{agent_id}' not available or path not found",
+                content=f"No active session for agent '{agent_id}'",
                 agentId=agent_id
             )
             return
@@ -115,48 +48,20 @@ class BridgeOrchestrator:
         yield BridgeEvent(
             agent=agent_type,
             type=EventType.AGENT_START,
-            content=f"{agent_id.upper()} starting...",
+            content=f"{session.name} v{session.capabilities.version or 'unknown'} processing...",
             agentId=agent_id
         )
 
         try:
-            cmd_args = self._build_cmd_args(agent_id, script_path, prompt, step_settings)
-            
-            if extra_args:
-                cmd_args.extend(extra_args)
-
-            self.logger.debug(f"Spawning {agent_id} with: {cmd_args}")
-
-            process = await asyncio.create_subprocess_exec(
-                *cmd_args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=self._get_env()
-            )
-            
-            while True:
-                chunk = await asyncio.wait_for(process.stdout.read(100), timeout=self.timeout)
-                if not chunk:
-                    break
-                
-                decoded = chunk.decode('utf-8', errors='replace')
-                
+            async for chunk in cli_manager.execute_query(
+                agent_id=agent_id.lower(),
+                prompt=prompt,
+                timeout=self.timeout
+            ):
                 yield BridgeEvent(
                     agent=agent_type,
                     type=EventType.TOKEN,
-                    content=decoded,
-                    agentId=agent_id
-                )
-            
-            exit_code = await process.wait()
-            if exit_code != 0:
-                stderr = await process.stderr.read()
-                err_msg = stderr.decode()
-                self.logger.error(f"ERROR {agent_id}: {err_msg}")
-                yield BridgeEvent(
-                    agent=AgentType.SYSTEM,
-                    type=EventType.ERROR,
-                    content=f"CLI Error: {err_msg}",
+                    content=chunk,
                     agentId=agent_id
                 )
             
@@ -176,7 +81,7 @@ class BridgeOrchestrator:
                 agentId=agent_id
             )
         except Exception as e:
-            self.logger.critical(f"CRITICAL EXECUTION ERROR: {e}")
+            self.logger.error(f"Error from {agent_id}: {e}")
             yield BridgeEvent(
                 agent=AgentType.SYSTEM,
                 type=EventType.ERROR,
@@ -194,7 +99,7 @@ class BridgeOrchestrator:
         yield BridgeEvent(
             agent=AgentType.ORCHESTRATOR,
             type=EventType.STATUS,
-            content="Initializing Dynamic Pipeline..."
+            content="Initializing Pipeline..."
         )
         
         rubric = get_quality_rubric()
@@ -206,7 +111,7 @@ class BridgeOrchestrator:
                 yield BridgeEvent(
                     agent=AgentType.ORCHESTRATOR,
                     type=EventType.ITERATION,
-                    content=f"Pipeline Iteration {iteration + 1}/{max_iterations}",
+                    content=f"Iteration {iteration + 1}/{max_iterations}",
                     iteration=iteration + 1
                 )
             
@@ -232,7 +137,6 @@ class BridgeOrchestrator:
                 async for event in self._run_agent(
                     agent_id=step.agentId,
                     prompt=prompt,
-                    step_settings=step.settings
                 ):
                     yield event
                     if event.type == EventType.TOKEN:
@@ -246,7 +150,7 @@ class BridgeOrchestrator:
         yield BridgeEvent(
             agent=AgentType.SYSTEM,
             type=EventType.DONE,
-            content=f"Pipeline Complete ({max_iterations} iteration{'s' if max_iterations > 1 else ''})",
+            content=f"Pipeline Complete",
             payload=final_response,
             satisfied=True
         )
@@ -271,42 +175,40 @@ class BridgeOrchestrator:
             if iteration > 0 and previous_responses:
                 return f"""Original Query: {query}
 
-Previous iteration responses:
+Previous responses:
 {previous_responses}
 
-Please refine and improve your response based on any feedback.
+Refine and improve based on feedback.
 
-Design/quality requirements:
+Requirements:
 {rubric}
 
-Provide a complete, well-structured response.{context_section}"""
+Provide a complete response.{context_section}"""
             else:
                 return f"""{query}
 
-Design/quality requirements:
+Requirements:
 {rubric}
 
-Provide a complete, well-structured response.{context_section}"""
+Provide a complete response.{context_section}"""
         
         elif role == "critic":
             responses_to_critique = "\n\n".join([
-                f"[{agent.upper()} Response]:\n{resp}"
+                f"[{agent.upper()}]:\n{resp}"
                 for agent, resp in accumulated_responses.items()
             ])
             
-            return f"""Critique the following responses:
+            return f"""Review and critique:
 
 {responses_to_critique}
 
 Original Query: {query}
 
-Provide constructive feedback on:
-1. Correctness and accuracy
-2. Code quality (if applicable)
+Provide feedback on:
+1. Correctness
+2. Quality
 3. Completeness
-4. Potential improvements
-
-Be specific and actionable.{context_section}"""
+4. Improvements needed{context_section}"""
         
         elif role == "refiner":
             responses = "\n\n".join([
@@ -314,25 +216,25 @@ Be specific and actionable.{context_section}"""
                 for agent, resp in accumulated_responses.items()
             ])
             
-            return f"""Original Query: {query}
+            return f"""Query: {query}
 
-Previous responses and critiques:
+Previous responses:
 {responses}
 
-Please provide a refined, improved response that addresses the feedback.
+Provide an improved response addressing any feedback.
 
-Design/quality requirements:
+Requirements:
 {rubric}{context_section}"""
         
         elif role == "analyzer":
-            return f"""Analyze the following query and provide insights:
+            return f"""Analyze:
 
 {query}
 
 Consider:
-1. Key requirements
-2. Potential challenges
-3. Recommended approach
+1. Requirements
+2. Challenges
+3. Approach
 4. Dependencies{context_section}"""
         
         else:
@@ -350,23 +252,23 @@ Consider:
         yield BridgeEvent(
             agent=AgentType.ORCHESTRATOR,
             type=EventType.STATUS,
-            content="Initializing Bridge Protocol..."
+            content="Initializing Bridge..."
         )
         
         yield BridgeEvent(
             agent=AgentType.ORCHESTRATOR,
             type=EventType.STATUS,
-            content="Phase 1: Gemini Generation"
+            content="Phase 1: Generation"
         )
         
-        context_section = f"\n\n--- Session Context ---\n{session_context}" if session_context else ""
+        context_section = f"\n\n--- Context ---\n{session_context}" if session_context else ""
         
         gemini_prompt = f"""{query}
 
-Design/quality requirements:
+Requirements:
 {rubric}
 
-Provide a complete, well-structured response.{context_section}"""
+Provide a complete response.{context_section}"""
         
         gemini_response = ""
         async for event in self._run_agent("gemini", gemini_prompt):
@@ -378,7 +280,7 @@ Provide a complete, well-structured response.{context_section}"""
             yield BridgeEvent(
                 agent=AgentType.SYSTEM,
                 type=EventType.ERROR,
-                content="Initial Gemini generation failed or returned empty response."
+                content="Generation failed or returned empty."
             )
             return
         
@@ -386,7 +288,7 @@ Provide a complete, well-structured response.{context_section}"""
             yield BridgeEvent(
                 agent=AgentType.SYSTEM,
                 type=EventType.DONE,
-                content="Generation Complete (No Critique)",
+                content="Complete (No Critique)",
                 payload=gemini_response,
                 satisfied=True
             )
@@ -406,19 +308,19 @@ Provide a complete, well-structured response.{context_section}"""
             yield BridgeEvent(
                 agent=AgentType.ORCHESTRATOR,
                 type=EventType.STATUS,
-                content="Phase 2: Qwen Critical Analysis"
+                content="Phase 2: Critique"
             )
             
-            qwen_prompt = f"""Critique this response:
+            qwen_prompt = f"""Critique this:
 {final_response}
 
-Original query: {query}
+Query: {query}
 
-Provide constructive feedback on:
-1. Correctness and accuracy
-2. Code quality (if applicable)
+Feedback on:
+1. Correctness
+2. Quality
 3. Completeness
-4. Potential improvements"""
+4. Improvements"""
 
             qwen_critique = ""
             async for event in self._run_agent("qwen", qwen_prompt):
@@ -436,18 +338,18 @@ Provide constructive feedback on:
                 yield BridgeEvent(
                     agent=AgentType.ORCHESTRATOR,
                     type=EventType.STATUS,
-                    content="Phase 3: Gemini Refinement"
+                    content="Phase 3: Refinement"
                 )
                 
-                refine_prompt = f"""Original query: {query}
+                refine_prompt = f"""Query: {query}
 
-Your previous response:
+Previous:
 {final_response}
 
-Critique received:
+Feedback:
 {qwen_critique}
 
-Please refine your response based on the critique. Provide an improved, complete response."""
+Provide improved response."""
 
                 refined_response = ""
                 async for event in self._run_agent("gemini", refine_prompt):
@@ -467,7 +369,7 @@ Please refine your response based on the critique. Provide an improved, complete
         yield BridgeEvent(
             agent=AgentType.SYSTEM,
             type=EventType.DONE,
-            content=f"Bridge Protocol Complete ({max_iterations} iteration{'s' if max_iterations > 1 else ''})",
+            content=f"Complete ({max_iterations} iteration{'s' if max_iterations > 1 else ''})",
             payload=final_response,
             satisfied=True
         )

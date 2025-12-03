@@ -2,15 +2,14 @@ export type AgentType = 'ORCHESTRATOR' | 'GEMINI' | 'QWEN' | 'CLAUDE' | 'CODEX' 
 
 export type EventType = 'status' | 'token' | 'critique' | 'refinement' | 'done' | 'error' | 'iteration' | 'pipeline_step' | 'agent_start' | 'agent_complete';
 
-export interface AgentFlag {
+export interface SessionInfo {
+  agentId: string;
   name: string;
-  flag: string;
-  type: 'select' | 'slider' | 'number' | 'text';
-  default: string | number;
-  minValue?: number;
-  maxValue?: number;
-  options?: string[];
-  description: string;
+  state: string;
+  version: string;
+  flagCount: number;
+  flags: Record<string, string>;
+  lastError?: string;
 }
 
 export interface DiscoveredAgent {
@@ -19,20 +18,20 @@ export interface DiscoveredAgent {
   path: string;
   nodePath: string;
   isAvailable: boolean;
-  supportedModels: string[];
-  defaultModel: string;
+  version: string;
+  detectedFlags: Record<string, string>;
   defaultRoles: string[];
-  flags: AgentFlag[];
   description: string;
   icon: string;
   color: string;
+  sessionState: string;
+  sessionInfo?: SessionInfo;
 }
 
 export interface PipelineStep {
   id: string;
   agentId: string;
   role: 'generator' | 'critic' | 'refiner' | 'analyzer';
-  model?: string;
   settings: Record<string, any>;
 }
 
@@ -88,6 +87,7 @@ export interface BridgeSettings {
   maxIterations: number;
   skipCritique: boolean;
   contextWindow: number;
+  theme: 'light' | 'dark' | 'system';
 }
 
 export interface PlatformState {
@@ -109,6 +109,7 @@ export interface PlatformState {
   sidebarCollapsed: boolean;
   rightPanelCollapsed: boolean;
   finalOutput: string | null;
+  isDarkMode: boolean;
 }
 
 export interface PlatformActions {
@@ -134,6 +135,8 @@ export interface PlatformActions {
   togglePipelineBuilder: () => void;
   toggleSidebar: () => void;
   toggleRightPanel: () => void;
+  toggleDarkMode: () => void;
+  setTheme: (theme: 'light' | 'dark' | 'system') => void;
 }
 
 export type PlatformStore = PlatformState & PlatformActions;

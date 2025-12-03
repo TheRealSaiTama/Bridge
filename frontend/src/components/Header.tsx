@@ -5,7 +5,9 @@ import {
   Wifi, 
   WifiOff,
   Layers,
-  Zap
+  Zap,
+  Moon,
+  Sun
 } from 'lucide-react';
 import { usePlatformStore } from '../store';
 
@@ -20,8 +22,11 @@ export function Header() {
     toggleSidebar, 
     toggleRightPanel, 
     toggleSettings,
+    toggleDarkMode,
+    isDarkMode,
     sidebarCollapsed,
-    rightPanelCollapsed
+    rightPanelCollapsed,
+    availableAgents
   } = usePlatformStore();
 
   return (
@@ -46,11 +51,13 @@ export function Header() {
           <span>/</span>
           <span className="px-2 py-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer">Platform</span>
           <span>/</span>
-          <span className="px-2 py-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer">Orchestration</span>
+          <span className="px-2 py-1 text-zinc-700 dark:text-zinc-300">
+            {availableAgents.length} agents
+          </span>
         </nav>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2">
         {activePipeline.length > 0 && (
           <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-indigo-50 dark:bg-indigo-950/50 rounded-full">
             <Layers className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
@@ -84,14 +91,26 @@ export function Header() {
               ? 'text-emerald-600 dark:text-emerald-400' 
               : 'text-zinc-500'
           }`}>
-            {isConnected ? 'Connected' : 'Offline'}
+            {isConnected ? 'Live' : 'Offline'}
           </span>
         </div>
 
         <div className="hidden sm:flex items-center gap-1 px-3 py-1.5 bg-zinc-100 dark:bg-zinc-800 rounded-full">
-          <span className="text-xs text-zinc-500">Max:</span>
+          <span className="text-xs text-zinc-500">Iter:</span>
           <span className="text-xs font-medium">{settings.maxIterations}</span>
         </div>
+
+        <button
+          onClick={toggleDarkMode}
+          className="p-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+          title={isDarkMode ? "Light mode" : "Dark mode"}
+        >
+          {isDarkMode ? (
+            <Sun className="w-5 h-5 text-amber-500" />
+          ) : (
+            <Moon className="w-5 h-5 text-zinc-500" />
+          )}
+        </button>
 
         <button
           onClick={toggleSettings}

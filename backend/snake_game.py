@@ -1,3 +1,19 @@
+#!/usr/bin/env python3
+"""
+Snake Game
+==========
+A classic Snake game implementation using Pygame.
+
+Controls:
+    Arrow Keys: Move Snake
+    P: Pause/Unpause
+    R: Restart (when Game Over)
+    Q: Quit
+
+Requirements:
+    pygame>=2.5.0
+"""
+
 import pygame
 import random
 import sys
@@ -18,6 +34,7 @@ COLOR_SNAKE = (100, 255, 100)    # Bright Green
 COLOR_FOOD = (255, 100, 100)     # Bright Red
 COLOR_TEXT = (240, 240, 240)     # Off-White
 COLOR_GRID = (50, 50, 50)        # Faint Gray
+COLOR_PAUSE = (255, 255, 0)      # Yellow
 
 class Direction(Enum):
     UP = (0, -1)
@@ -127,6 +144,7 @@ class Game:
         self.snake = Snake()
         self.food = Food()
         self.running = True
+        self.paused = False
         self.game_over = False
         self.score = 0
         self.high_score = 0
@@ -136,6 +154,18 @@ class Game:
             if event.type == pygame.QUIT:
                 self.running = False
             elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_q:
+                    self.running = False
+                elif event.key == pygame.K_p:
+                    self.paused = not self.paused
+                
+                # Game Over Controls
+                if self.game_over:
+                    if event.key == pygame.K_r:
+                        self.restart()
+                    continue # Skip movement inputs if game over
+
+                # Movement Controls
                 if event.key == pygame.K_UP:
                     self.snake.change_direction(Direction.UP)
                 elif event.key == pygame.K_DOWN:
@@ -144,13 +174,9 @@ class Game:
                     self.snake.change_direction(Direction.LEFT)
                 elif event.key == pygame.K_RIGHT:
                     self.snake.change_direction(Direction.RIGHT)
-                elif event.key == pygame.K_r and self.game_over:
-                    self.restart()
-                elif event.key == pygame.K_q:
-                    self.running = False
 
     def update(self):
-        if self.game_over:
+        if self.game_over or self.paused:
             return
 
         if not self.snake.move():
@@ -168,12 +194,6 @@ class Game:
     def draw(self):
         self.surface.fill(COLOR_BG)
 
-        # Draw Grid (Optional, for aesthetics)
-        # for x in range(0, WINDOW_WIDTH, BLOCK_SIZE):
-        #     pygame.draw.line(self.surface, COLOR_GRID, (x, 0), (x, WINDOW_HEIGHT))
-        # for y in range(0, WINDOW_HEIGHT, BLOCK_SIZE):
-        #     pygame.draw.line(self.surface, COLOR_GRID, (0, y), (WINDOW_WIDTH, y))
-
         self.food.draw(self.surface)
         self.snake.draw(self.surface)
         self.draw_ui()
@@ -182,6 +202,11 @@ class Game:
     def draw_ui(self):
         score_text = self.font.render(f"Score: {self.score}  High Score: {self.high_score}", True, COLOR_TEXT)
         self.surface.blit(score_text, (10, 10))
+
+        if self.paused and not self.game_over:
+            pause_text = self.large_font.render("PAUSED", True, COLOR_PAUSE)
+            rect = pause_text.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2))
+            self.surface.blit(pause_text, rect)
 
         if self.game_over:
             overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)

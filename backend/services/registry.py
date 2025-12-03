@@ -1,10 +1,13 @@
 import os
 import shutil
 import subprocess
+import asyncio
 from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 from enum import Enum
+
+from .cli_session import cli_manager, CLICapabilities
 
 
 class AgentRole(str, Enum):
@@ -15,31 +18,19 @@ class AgentRole(str, Enum):
 
 
 @dataclass
-class AgentFlag:
-    name: str
-    flag: str
-    type: str
-    default: any
-    min_value: Optional[float] = None
-    max_value: Optional[float] = None
-    options: Optional[List[str]] = None
-    description: str = ""
-
-
-@dataclass
 class AgentInfo:
     id: str
     name: str
     path: str
     node_path: str
     is_available: bool
-    supported_models: List[str]
-    default_model: str
-    default_roles: List[AgentRole]
-    flags: List[AgentFlag]
-    description: str
-    icon: str
-    color: str
+    version: str = ""
+    detected_flags: Dict[str, str] = field(default_factory=dict)
+    default_roles: List[AgentRole] = field(default_factory=list)
+    description: str = ""
+    icon: str = ""
+    color: str = ""
+    session_state: str = "inactive"
 
     def to_dict(self) -> dict:
         return {
@@ -48,96 +39,50 @@ class AgentInfo:
             "path": self.path,
             "nodePath": self.node_path,
             "isAvailable": self.is_available,
-            "supportedModels": self.supported_models,
-            "defaultModel": self.default_model,
+            "version": self.version,
+            "detectedFlags": self.detected_flags,
             "defaultRoles": [r.value for r in self.default_roles],
-            "flags": [
-                {
-                    "name": f.name,
-                    "flag": f.flag,
-                    "type": f.type,
-                    "default": f.default,
-                    "minValue": f.min_value,
-                    "maxValue": f.max_value,
-                    "options": f.options,
-                    "description": f.description,
-                }
-                for f in self.flags
-            ],
             "description": self.description,
             "icon": self.icon,
             "color": self.color,
+            "sessionState": self.session_state,
         }
 
 
 AGENT_SIGNATURES = {
     "gemini": {
         "name": "Gemini",
-        "cli_patterns": [
-            "@google/gemini-cli",
-            "gemini-cli",
-        ],
+        "cli_patterns": ["@google/gemini-cli"],
         "binary_names": ["gemini"],
-        "supported_models": ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash"],
-        "default_model": "gemini-1.5-pro",
         "default_roles": [AgentRole.GENERATOR, AgentRole.REFINER],
-        "flags": [
-            AgentFlag("Approval Mode", "--approval-mode", "select", "yolo", options=["yolo", "suggest", "ask"]),
-            AgentFlag("Allowed Tools", "--allowed-tools", "text", ""),
-        ],
-        "description": "Google's Gemini AI for generation and refinement",
+        "description": "Google Gemini CLI",
         "icon": "Sparkles",
         "color": "indigo",
     },
     "qwen": {
         "name": "Qwen",
-        "cli_patterns": [
-            "@qwen-code/qwen-code",
-            "qwen-code",
-        ],
+        "cli_patterns": ["@anthropic/claude-code", "@anthropic/claude", "qwen"],
         "binary_names": ["qwen"],
-        "supported_models": ["qwen-plus", "qwen-turbo", "qwen-max"],
-        "default_model": "qwen-plus",
         "default_roles": [AgentRole.CRITIC, AgentRole.ANALYZER],
-        "flags": [
-            AgentFlag("MCP Servers", "--allowed-mcp-server-names", "text", ""),
-        ],
-        "description": "Alibaba's Qwen for critical analysis",
+        "description": "Qwen CLI",
         "icon": "Zap",
         "color": "amber",
     },
     "claude": {
         "name": "Claude",
-        "cli_patterns": [
-            "@anthropic-ai/claude-cli",
-            "claude-cli",
-        ],
+        "cli_patterns": ["@anthropic/claude-code", "@anthropic-ai/claude-code"],
         "binary_names": ["claude"],
-        "supported_models": ["claude-3-opus", "claude-3-sonnet", "claude-3-haiku"],
-        "default_model": "claude-3-sonnet",
         "default_roles": [AgentRole.GENERATOR, AgentRole.CRITIC],
-        "flags": [
-            AgentFlag("Temperature", "--temperature", "slider", 0.7, 0.0, 1.0),
-            AgentFlag("Max Tokens", "--max-tokens", "number", 4096, 1, 100000),
-        ],
-        "description": "Anthropic's Claude for balanced generation",
+        "description": "Anthropic Claude CLI",
         "icon": "Brain",
         "color": "purple",
     },
     "codex": {
         "name": "Codex",
-        "cli_patterns": [
-            "@openai/codex-cli",
-            "codex-cli",
-        ],
+        "cli_patterns": ["@openai/codex"],
         "binary_names": ["codex"],
-        "supported_models": ["code-davinci-002", "gpt-4-turbo"],
-        "default_model": "gpt-4-turbo",
         "default_roles": [AgentRole.GENERATOR],
-        "flags": [
-            AgentFlag("Temperature", "--temperature", "slider", 0.2, 0.0, 1.0),
-        ],
-        "description": "OpenAI Codex for code generation",
+        "description": "OpenAI Codex CLI",
         "icon": "Code",
         "color": "emerald",
     },
@@ -148,8 +93,38 @@ class AgentRegistry:
     def __init__(self):
         self.agents: Dict[str, AgentInfo] = {}
         self.node_path: Optional[str] = None
+        self._initialized = False
+    
+    def discover_sync(self):
         self._discover_node()
         self._scan_for_agents()
+    
+    async def initialize(self):
+        if self._initialized:
+            return
+        
+        self._discover_node()
+        self._scan_for_agents()
+        
+        for agent_id, agent in self.agents.items():
+            if agent.is_available:
+                try:
+                    session = await cli_manager.initialize_session(
+                        agent_id=agent_id,
+                        name=agent.name,
+                        node_path=agent.node_path,
+                        script_path=agent.path
+                    )
+                    
+                    agent.version = session.capabilities.version
+                    agent.detected_flags = session.capabilities.available_flags
+                    agent.session_state = session.state.value
+                    
+                except Exception as e:
+                    agent.session_state = "error"
+                    print(f"Failed to initialize session for {agent_id}: {e}")
+        
+        self._initialized = True
 
     def _discover_node(self):
         search_paths = [
@@ -207,13 +182,10 @@ class AgentRegistry:
         
         for npm_path in npm_paths:
             for pattern in signature["cli_patterns"]:
-                cli_path = npm_path / pattern / "dist/index.js"
-                if cli_path.exists():
-                    return str(cli_path)
-                
-                cli_path = npm_path / pattern / "index.js"
-                if cli_path.exists():
-                    return str(cli_path)
+                for entry_point in ["dist/index.js", "index.js", "cli.js", "bin/cli.js"]:
+                    cli_path = npm_path / pattern / entry_point
+                    if cli_path.exists():
+                        return str(cli_path)
         
         for binary_name in signature["binary_names"]:
             binary_path = shutil.which(binary_name)
@@ -227,16 +199,16 @@ class AgentRegistry:
             cli_path = self._find_cli_path(agent_id, signature)
             is_available = cli_path is not None and self.node_path is not None
             
+            if cli_path and not cli_path.endswith('.js'):
+                pass
+            
             agent_info = AgentInfo(
                 id=agent_id,
                 name=signature["name"],
                 path=cli_path or "",
                 node_path=self.node_path or "",
                 is_available=is_available,
-                supported_models=signature["supported_models"],
-                default_model=signature["default_model"],
                 default_roles=signature["default_roles"],
-                flags=signature["flags"],
                 description=signature["description"],
                 icon=signature["icon"],
                 color=signature["color"],
@@ -252,10 +224,11 @@ class AgentRegistry:
     def get_all_agents(self) -> List[AgentInfo]:
         return list(self.agents.values())
 
-    def refresh(self):
+    async def refresh(self):
+        self._initialized = False
         self.agents.clear()
-        self._discover_node()
-        self._scan_for_agents()
+        await cli_manager.close_all()
+        await self.initialize()
 
     def to_dict(self) -> dict:
         return {
@@ -263,5 +236,5 @@ class AgentRegistry:
             "agents": {k: v.to_dict() for k, v in self.agents.items()},
             "availableCount": len(self.get_available_agents()),
             "totalCount": len(self.agents),
+            "initialized": self._initialized,
         }
-

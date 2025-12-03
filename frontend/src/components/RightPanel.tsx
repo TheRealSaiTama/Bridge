@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { 
   ChevronDown, 
   ChevronRight, 
-  GripVertical,
   Trash2,
   Plus,
   Sparkles,
@@ -10,7 +9,11 @@ import {
   Brain,
   Code,
   Settings2,
-  Layers
+  Layers,
+  Sun,
+  Moon,
+  Monitor,
+  Flag
 } from 'lucide-react';
 import { usePlatformStore } from '../store';
 import { PipelineStep, DiscoveredAgent } from '../types';
@@ -52,6 +55,8 @@ function PipelineStepCard({
 }) {
   const [expanded, setExpanded] = useState(false);
   const Icon = agent?.icon ? iconMap[agent.icon] : Sparkles;
+  const detectedFlags = agent?.detectedFlags || {};
+  const flagKeys = Object.keys(detectedFlags);
 
   return (
     <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
@@ -87,6 +92,9 @@ function PipelineStepCard({
               {step.role}
             </span>
           </div>
+          {agent?.version && (
+            <span className="text-xs text-zinc-400">v{agent.version}</span>
+          )}
         </div>
 
         <button
@@ -120,60 +128,34 @@ function PipelineStepCard({
             </select>
           </div>
 
-          {agent?.supportedModels && agent.supportedModels.length > 1 && (
+          {flagKeys.length > 0 && (
             <div>
-              <label className="block text-xs text-zinc-500 mb-1">Model</label>
-              <select
-                value={step.model || agent.defaultModel}
-                onChange={(e) => onUpdate({ model: e.target.value })}
-                className="w-full px-3 py-1.5 text-sm rounded-lg border border-zinc-200 dark:border-zinc-600 bg-white dark:bg-zinc-800"
-              >
-                {agent.supportedModels.map(model => (
-                  <option key={model} value={model}>{model}</option>
+              <div className="flex items-center gap-1 text-xs text-zinc-500 mb-2">
+                <Flag className="w-3 h-3" />
+                <span>Detected Flags ({flagKeys.length})</span>
+              </div>
+              <div className="space-y-1 max-h-32 overflow-y-auto">
+                {flagKeys.slice(0, 10).map(flag => (
+                  <div 
+                    key={flag} 
+                    className="text-xs bg-zinc-50 dark:bg-zinc-900 rounded px-2 py-1"
+                  >
+                    <code className="text-indigo-600 dark:text-indigo-400">{flag}</code>
+                    {detectedFlags[flag] && (
+                      <span className="text-zinc-400 ml-2 truncate block">
+                        {detectedFlags[flag].substring(0, 50)}
+                      </span>
+                    )}
+                  </div>
                 ))}
-              </select>
+                {flagKeys.length > 10 && (
+                  <div className="text-xs text-zinc-400 text-center py-1">
+                    +{flagKeys.length - 10} more flags
+                  </div>
+                )}
+              </div>
             </div>
           )}
-
-          {agent?.flags.map(flag => (
-            <div key={flag.flag}>
-              <label className="block text-xs text-zinc-500 mb-1">{flag.name}</label>
-              {flag.type === 'slider' ? (
-                <input
-                  type="range"
-                  min={flag.minValue}
-                  max={flag.maxValue}
-                  step={0.1}
-                  value={step.settings[flag.flag] ?? flag.default}
-                  onChange={(e) => onUpdate({ 
-                    settings: { ...step.settings, [flag.flag]: parseFloat(e.target.value) }
-                  })}
-                  className="w-full"
-                />
-              ) : flag.type === 'select' && flag.options ? (
-                <select
-                  value={step.settings[flag.flag] ?? flag.default}
-                  onChange={(e) => onUpdate({ 
-                    settings: { ...step.settings, [flag.flag]: e.target.value }
-                  })}
-                  className="w-full px-3 py-1.5 text-sm rounded-lg border border-zinc-200 dark:border-zinc-600 bg-white dark:bg-zinc-800"
-                >
-                  {flag.options.map(opt => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  type={flag.type === 'number' ? 'number' : 'text'}
-                  value={step.settings[flag.flag] ?? flag.default}
-                  onChange={(e) => onUpdate({ 
-                    settings: { ...step.settings, [flag.flag]: e.target.value }
-                  })}
-                  className="w-full px-3 py-1.5 text-sm rounded-lg border border-zinc-200 dark:border-zinc-600 bg-white dark:bg-zinc-800"
-                />
-              )}
-            </div>
-          ))}
         </div>
       )}
     </div>
@@ -181,10 +163,34 @@ function PipelineStepCard({
 }
 
 function SettingsPanel() {
-  const { settings, updateSettings } = usePlatformStore();
+  const { settings, updateSettings, setTheme, isDarkMode } = usePlatformStore();
 
   return (
     <div className="space-y-4">
+      <div>
+        <label className="block text-xs text-zinc-500 mb-2">Theme</label>
+        <div className="flex gap-2">
+          {[
+            { value: 'light', icon: Sun, label: 'Light' },
+            { value: 'dark', icon: Moon, label: 'Dark' },
+            { value: 'system', icon: Monitor, label: 'System' },
+          ].map(({ value, icon: Icon, label }) => (
+            <button
+              key={value}
+              onClick={() => setTheme(value as any)}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs transition-colors ${
+                settings.theme === value
+                  ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400'
+                  : 'bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700'
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div>
         <label className="flex items-center justify-between text-sm mb-2">
           <span>Max Iterations</span>
@@ -196,14 +202,14 @@ function SettingsPanel() {
           max={10}
           value={settings.maxIterations}
           onChange={(e) => updateSettings({ maxIterations: parseInt(e.target.value) })}
-          className="w-full"
+          className="w-full accent-indigo-500"
         />
       </div>
 
       <div>
         <label className="flex items-center justify-between text-sm mb-2">
           <span>Context Window</span>
-          <span className="text-zinc-500">{settings.contextWindow} messages</span>
+          <span className="text-zinc-500">{settings.contextWindow} msgs</span>
         </label>
         <input
           type="range"
@@ -211,12 +217,12 @@ function SettingsPanel() {
           max={20}
           value={settings.contextWindow}
           onChange={(e) => updateSettings({ contextWindow: parseInt(e.target.value) })}
-          className="w-full"
+          className="w-full accent-indigo-500"
         />
       </div>
 
       <div className="flex items-center justify-between">
-        <span className="text-sm">Skip Critique Phase</span>
+        <span className="text-sm">Skip Critique</span>
         <button
           onClick={() => updateSettings({ skipCritique: !settings.skipCritique })}
           className={`w-10 h-6 rounded-full transition-colors ${
@@ -244,9 +250,6 @@ export function RightPanel() {
     reorderPipeline,
     clearPipeline,
     addPipelineStep,
-    showSettings,
-    showPipelineBuilder,
-    togglePipelineBuilder
   } = usePlatformStore();
 
   const [pipelineOpen, setPipelineOpen] = useState(true);
@@ -263,7 +266,7 @@ export function RightPanel() {
           >
             {pipelineOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
             <Layers className="w-4 h-4 text-indigo-500" />
-            Pipeline Builder
+            Pipeline
             {activePipeline.length > 0 && (
               <span className="ml-auto px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 text-xs rounded-full">
                 {activePipeline.length}
@@ -276,8 +279,8 @@ export function RightPanel() {
               {activePipeline.length === 0 ? (
                 <div className="text-center py-6 text-sm text-zinc-400">
                   <Layers className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                  <p>No steps configured</p>
-                  <p className="text-xs mt-1">Click agents in the sidebar to add</p>
+                  <p>No steps</p>
+                  <p className="text-xs mt-1">Add agents from sidebar</p>
                 </div>
               ) : (
                 <>
@@ -300,7 +303,7 @@ export function RightPanel() {
                     onClick={clearPipeline}
                     className="w-full px-3 py-2 text-sm text-zinc-500 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
                   >
-                    Clear Pipeline
+                    Clear All
                   </button>
                 </>
               )}
@@ -316,22 +319,28 @@ export function RightPanel() {
 
                 {quickAddOpen && (
                   <div className="absolute top-full left-0 right-0 mt-2 bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 shadow-lg z-10 overflow-hidden">
-                    {availableAgents.map(agent => (
-                      <button
-                        key={agent.id}
-                        onClick={() => {
-                          addPipelineStep(agent.id, agent.defaultRoles[0] || 'generator');
-                          setQuickAddOpen(false);
-                        }}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-700"
-                      >
-                        {iconMap[agent.icon] && (() => {
-                          const Icon = iconMap[agent.icon];
-                          return <Icon className="w-4 h-4 text-zinc-500" />;
-                        })()}
-                        <span>{agent.name}</span>
-                      </button>
-                    ))}
+                    {availableAgents.map(agent => {
+                      const Icon = iconMap[agent.icon] || Sparkles;
+                      return (
+                        <button
+                          key={agent.id}
+                          onClick={() => {
+                            addPipelineStep(agent.id, agent.defaultRoles[0] || 'generator');
+                            setQuickAddOpen(false);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-700"
+                        >
+                          <Icon className="w-4 h-4 text-zinc-500" />
+                          <span>{agent.name}</span>
+                          {agent.version && (
+                            <span className="text-xs text-zinc-400 ml-auto">v{agent.version}</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                    {availableAgents.length === 0 && (
+                      <div className="px-3 py-2 text-sm text-zinc-400">No agents available</div>
+                    )}
                   </div>
                 )}
               </div>
@@ -359,4 +368,3 @@ export function RightPanel() {
     </aside>
   );
 }
-
