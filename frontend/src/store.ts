@@ -1,9 +1,13 @@
 import { create } from 'zustand';
-import { BridgeStore, BridgeEvent, Message, AgentState } from './types';
+import { PlatformStore, BridgeEvent, Message, AgentState, BridgeSettings, DiscoveredAgent, Session, PipelineStep } from './types';
 
-const WS_URL = import.meta.env.PROD 
-  ? `wss://${window.location.host}/ws/bridge`
-  : 'ws://localhost:8000/ws/bridge';
+const API_URL = import.meta.env.PROD 
+  ? `${window.location.origin}`
+  : 'http://localhost:8000';
+
+const WS_BASE = import.meta.env.PROD 
+  ? `wss://${window.location.host}`
+  : 'ws://localhost:8000';
 
 const createInitialAgentState = (): AgentState => ({
   isActive: false,
@@ -11,31 +15,113 @@ const createInitialAgentState = (): AgentState => ({
   tokenCount: 0,
 });
 
+const defaultSettings: BridgeSettings = {
+  maxIterations: 1,
+  skipCritique: false,
+  contextWindow: 5,
+};
+
 const generateId = () => Math.random().toString(36).substring(2, 15);
 
-export const useBridgeStore = create<BridgeStore>((set, get) => {
+export const usePlatformStore = create<PlatformStore>((set, get) => {
   let ws: WebSocket | null = null;
-  let currentGeminiMessageId: string | null = null;
-  let currentQwenMessageId: string | null = null;
+  let currentMessageIds: Record<string, string> = {};
 
   return {
     isConnected: false,
     isProcessing: false,
-    geminiMessages: [],
-    qwenMessages: [],
-    systemMessages: [],
-    finalOutput: null,
-    geminiState: createInitialAgentState(),
-    qwenState: createInitialAgentState(),
+    discoveredAgents: [],
+    availableAgents: [],
+    sessions: [],
+    activeSessionId: null,
+    activePipeline: [],
+    chatHistory: [],
+    agentStates: {},
     currentIteration: 0,
-    maxIterations: 8,
+    currentStep: 0,
     userQuery: '',
-    queryHistory: [],
+    settings: defaultSettings,
+    showSettings: false,
+    showPipelineBuilder: true,
+    sidebarCollapsed: false,
+    rightPanelCollapsed: false,
+    finalOutput: null,
 
-    connect: () => {
+    fetchAgents: async () => {
+      try {
+        const res = await fetch(`${API_URL}/agents/discovered`);
+        const data = await res.json();
+        const agents = data.agents || [];
+        const available = data.available || [];
+        
+        const agentStates: Record<string, AgentState> = {};
+        agents.forEach((agent: DiscoveredAgent) => {
+          agentStates[agent.id] = createInitialAgentState();
+        });
+        
+        set({ 
+          discoveredAgents: agents,
+          availableAgents: available,
+          agentStates 
+        });
+      } catch (e) {
+        console.error('Failed to fetch agents:', e);
+      }
+    },
+
+    fetchSessions: async () => {
+      try {
+        const res = await fetch(`${API_URL}/sessions`);
+        const data = await res.json();
+        set({ sessions: data.sessions || [] });
+      } catch (e) {
+        console.error('Failed to fetch sessions:', e);
+      }
+    },
+
+    createSession: async (name?: string) => {
+      const { activePipeline } = get();
+      const res = await fetch(`${API_URL}/session/new`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          pipeline: activePipeline.map(s => ({
+            agentId: s.agentId,
+            role: s.role,
+            model: s.model,
+            settings: s.settings,
+          }))
+        })
+      });
+      const session = await res.json();
+      set(state => ({ 
+        sessions: [session, ...state.sessions],
+        activeSessionId: session.id
+      }));
+      return session;
+    },
+
+    deleteSession: async (sessionId: string) => {
+      await fetch(`${API_URL}/session/${sessionId}`, { method: 'DELETE' });
+      set(state => ({
+        sessions: state.sessions.filter(s => s.id !== sessionId),
+        activeSessionId: state.activeSessionId === sessionId ? null : state.activeSessionId
+      }));
+    },
+
+    setActiveSession: (sessionId: string) => {
+      set({ activeSessionId: sessionId, chatHistory: [] });
+    },
+
+    connect: (sessionId?: string) => {
       if (ws?.readyState === WebSocket.OPEN) return;
 
-      ws = new WebSocket(WS_URL);
+      const wsUrl = sessionId 
+        ? `${WS_BASE}/ws/chat/${sessionId}`
+        : `${WS_BASE}/ws/bridge`;
+      
+      ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
         set({ isConnected: true });
@@ -70,189 +156,213 @@ export const useBridgeStore = create<BridgeStore>((set, get) => {
         return;
       }
 
+      const { settings, activePipeline } = get();
+
       set({
-        geminiMessages: [],
-        qwenMessages: [],
-        systemMessages: [],
+        chatHistory: [],
         finalOutput: null,
         isProcessing: true,
         currentIteration: 0,
-        geminiState: { ...createInitialAgentState(), isThinking: true },
-        qwenState: createInitialAgentState(),
-        queryHistory: [...get().queryHistory, query],
+        currentStep: 0,
       });
 
-      currentGeminiMessageId = null;
-      currentQwenMessageId = null;
+      currentMessageIds = {};
 
-      ws.send(JSON.stringify({ query }));
+      const payload: Record<string, any> = { 
+        query,
+        maxIterations: settings.maxIterations,
+        skipCritique: settings.skipCritique
+      };
+
+      if (activePipeline.length > 0) {
+        payload.pipeline = {
+          steps: activePipeline.map(s => ({
+            agentId: s.agentId,
+            role: s.role,
+            model: s.model,
+            settings: s.settings,
+          })),
+          maxIterations: settings.maxIterations,
+          contextWindow: settings.contextWindow,
+        };
+      }
+
+      ws.send(JSON.stringify(payload));
     },
 
     handleEvent: (event: BridgeEvent) => {
-      const { agent, type, content, iteration, satisfied, payload } = event;
+      const { agent, type, content, iteration, satisfied, payload, step, agentId } = event;
+      const effectiveAgentId = agentId || agent.toLowerCase();
 
-      switch (agent) {
-        case 'ORCHESTRATOR':
+      switch (type) {
+        case 'status':
+        case 'iteration':
+        case 'pipeline_step':
           const statusMessage: Message = {
             id: generateId(),
-            agent: 'ORCHESTRATOR',
+            agent,
+            agentId: effectiveAgentId,
             content: content || '',
             timestamp: new Date(),
             type,
           };
           set((state) => ({
-            systemMessages: [...state.systemMessages, statusMessage],
+            chatHistory: [...state.chatHistory, statusMessage],
             currentIteration: iteration ?? state.currentIteration,
+            currentStep: step ?? state.currentStep,
           }));
           break;
 
-        case 'GEMINI':
-          if (type === 'token') {
-            set((state) => {
-              const messages = [...state.geminiMessages];
-              
-              if (!currentGeminiMessageId) {
-                currentGeminiMessageId = generateId();
-                messages.push({
-                  id: currentGeminiMessageId,
-                  agent: 'GEMINI',
-                  content: content || '',
-                  timestamp: new Date(),
-                  isStreaming: true,
-                  type,
-                });
-              } else {
-                const lastIdx = messages.findIndex(m => m.id === currentGeminiMessageId);
-                if (lastIdx !== -1) {
-                  messages[lastIdx] = {
-                    ...messages[lastIdx],
-                    content: messages[lastIdx].content + (content || ''),
-                  };
-                }
+        case 'agent_start':
+          set((state) => ({
+            agentStates: {
+              ...state.agentStates,
+              [effectiveAgentId]: {
+                ...createInitialAgentState(),
+                isActive: true,
+                isThinking: true,
               }
+            }
+          }));
+          break;
 
-              return {
-                geminiMessages: messages,
-                geminiState: {
-                  ...state.geminiState,
-                  isActive: true,
-                  isThinking: false,
-                  tokenCount: state.geminiState.tokenCount + 1,
-                },
-              };
-            });
-          } else if (type === 'refinement') {
-            currentGeminiMessageId = generateId();
-            set((state) => ({
-              geminiMessages: [...state.geminiMessages, {
-                id: currentGeminiMessageId!,
-                agent: 'GEMINI',
-                content: content || '',
-                timestamp: new Date(),
-                type,
-              }],
-              geminiState: {
-                ...state.geminiState,
+        case 'agent_complete':
+          currentMessageIds[effectiveAgentId] = '';
+          set((state) => ({
+            agentStates: {
+              ...state.agentStates,
+              [effectiveAgentId]: {
+                ...state.agentStates[effectiveAgentId],
                 isActive: false,
                 isThinking: false,
-              },
-            }));
-          }
+              }
+            }
+          }));
           break;
 
-        case 'QWEN':
-          if (type === 'critique') {
-            set((state) => {
-              const messages = [...state.qwenMessages];
-              
-              if (!currentQwenMessageId) {
-                currentQwenMessageId = generateId();
-                messages.push({
-                  id: currentQwenMessageId,
-                  agent: 'QWEN',
-                  content: content || '',
-                  timestamp: new Date(),
-                  isStreaming: true,
-                  type,
-                });
-              } else {
-                const lastIdx = messages.findIndex(m => m.id === currentQwenMessageId);
-                if (lastIdx !== -1) {
-                  messages[lastIdx] = {
-                    ...messages[lastIdx],
-                    content: messages[lastIdx].content + (content || ''),
-                  };
-                }
+        case 'token':
+        case 'critique':
+        case 'refinement':
+          set((state) => {
+            const messages = [...state.chatHistory];
+            const messageKey = `${effectiveAgentId}_${type}`;
+            
+            if (!currentMessageIds[messageKey]) {
+              currentMessageIds[messageKey] = generateId();
+              messages.push({
+                id: currentMessageIds[messageKey],
+                agent,
+                agentId: effectiveAgentId,
+                content: content || '',
+                timestamp: new Date(),
+                isStreaming: true,
+                type,
+              });
+            } else {
+              const lastIdx = messages.findIndex(m => m.id === currentMessageIds[messageKey]);
+              if (lastIdx !== -1) {
+                messages[lastIdx] = {
+                  ...messages[lastIdx],
+                  content: messages[lastIdx].content + (content || ''),
+                };
               }
+            }
 
-              return {
-                qwenMessages: messages,
-                qwenState: {
-                  ...state.qwenState,
+            return {
+              chatHistory: messages,
+              agentStates: {
+                ...state.agentStates,
+                [effectiveAgentId]: {
+                  ...state.agentStates[effectiveAgentId],
                   isActive: true,
                   isThinking: false,
-                  tokenCount: state.qwenState.tokenCount + 1,
-                },
-                geminiState: {
-                  ...state.geminiState,
-                  isActive: false,
-                },
-              };
-            });
-          }
+                  tokenCount: (state.agentStates[effectiveAgentId]?.tokenCount || 0) + 1,
+                }
+              }
+            };
+          });
           break;
 
-        case 'SYSTEM':
-          if (type === 'done') {
-            currentGeminiMessageId = null;
-            currentQwenMessageId = null;
+        case 'done':
+          currentMessageIds = {};
+          set((state) => {
+            const newAgentStates = { ...state.agentStates };
+            Object.keys(newAgentStates).forEach(key => {
+              newAgentStates[key] = { ...newAgentStates[key], isActive: false, isThinking: false };
+            });
             
-            set((state) => ({
+            return {
               isProcessing: false,
               finalOutput: payload || null,
-              geminiState: { ...state.geminiState, isActive: false, isThinking: false },
-              qwenState: { ...state.qwenState, isActive: false, isThinking: false },
-              systemMessages: [...state.systemMessages, {
+              agentStates: newAgentStates,
+              chatHistory: [...state.chatHistory, {
                 id: generateId(),
                 agent: 'SYSTEM',
-                content: content || (satisfied ? 'Consensus reached' : 'Max iterations reached'),
+                content: content || (satisfied ? 'Pipeline complete' : 'Complete'),
                 timestamp: new Date(),
                 type,
               }],
-            }));
-          } else if (type === 'error') {
-            set((state) => ({
-              isProcessing: false,
-              systemMessages: [...state.systemMessages, {
-                id: generateId(),
-                agent: 'SYSTEM',
-                content: `Error: ${content}`,
-                timestamp: new Date(),
-                type,
-              }],
-            }));
-          }
+            };
+          });
+          break;
+
+        case 'error':
+          set((state) => ({
+            isProcessing: false,
+            chatHistory: [...state.chatHistory, {
+              id: generateId(),
+              agent: 'SYSTEM',
+              content: `Error: ${content}`,
+              timestamp: new Date(),
+              type,
+            }],
+          }));
           break;
       }
-
-      if (type === 'iteration') {
-        currentGeminiMessageId = null;
-        currentQwenMessageId = null;
-        set((state) => ({
-          geminiState: { ...state.geminiState, isThinking: true },
-          qwenState: { ...state.qwenState, isThinking: false },
-        }));
-      }
     },
+
+    addPipelineStep: (agentId: string, role: string) => {
+      const step: PipelineStep = {
+        id: generateId(),
+        agentId,
+        role: role as any,
+        settings: {},
+      };
+      set(state => ({ activePipeline: [...state.activePipeline, step] }));
+    },
+
+    removePipelineStep: (stepId: string) => {
+      set(state => ({ 
+        activePipeline: state.activePipeline.filter(s => s.id !== stepId) 
+      }));
+    },
+
+    updatePipelineStep: (stepId: string, updates: Partial<PipelineStep>) => {
+      set(state => ({
+        activePipeline: state.activePipeline.map(s => 
+          s.id === stepId ? { ...s, ...updates } : s
+        )
+      }));
+    },
+
+    reorderPipeline: (fromIndex: number, toIndex: number) => {
+      set(state => {
+        const pipeline = [...state.activePipeline];
+        const [removed] = pipeline.splice(fromIndex, 1);
+        pipeline.splice(toIndex, 0, removed);
+        return { activePipeline: pipeline };
+      });
+    },
+
+    clearPipeline: () => set({ activePipeline: [] }),
 
     setUserQuery: (query: string) => set({ userQuery: query }),
 
     clearMessages: () => set({
-      geminiMessages: [],
-      qwenMessages: [],
-      systemMessages: [],
+      chatHistory: [],
       finalOutput: null,
       currentIteration: 0,
+      currentStep: 0,
     }),
 
     reset: () => {
@@ -260,15 +370,32 @@ export const useBridgeStore = create<BridgeStore>((set, get) => {
       set({
         isConnected: false,
         isProcessing: false,
-        geminiMessages: [],
-        qwenMessages: [],
-        systemMessages: [],
+        chatHistory: [],
         finalOutput: null,
-        geminiState: createInitialAgentState(),
-        qwenState: createInitialAgentState(),
         currentIteration: 0,
+        currentStep: 0,
         userQuery: '',
       });
     },
+
+    updateSettings: (newSettings: Partial<BridgeSettings>) => set((state) => ({
+      settings: { ...state.settings, ...newSettings }
+    })),
+
+    toggleSettings: () => set((state) => ({ showSettings: !state.showSettings })),
+    
+    togglePipelineBuilder: () => set((state) => ({ 
+      showPipelineBuilder: !state.showPipelineBuilder 
+    })),
+    
+    toggleSidebar: () => set((state) => ({ 
+      sidebarCollapsed: !state.sidebarCollapsed 
+    })),
+    
+    toggleRightPanel: () => set((state) => ({ 
+      rightPanelCollapsed: !state.rightPanelCollapsed 
+    })),
   };
 });
+
+export const useBridgeStore = usePlatformStore;

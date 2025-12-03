@@ -1,42 +1,54 @@
 import asyncio
 import logging
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Dict
 
 from config import settings
 from orchestrator import BridgeOrchestrator
-from models import BridgeEvent, AgentType, EventType
+from models import (
+    BridgeEvent, AgentType, EventType, 
+    SessionCreateRequest, SessionUpdateRequest, PipelineStepConfig
+)
+from services import AgentRegistry, SessionManager, ChatSession
+from services.session import MessageRole
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+registry: AgentRegistry = None
+session_manager: SessionManager = None
+orchestrator: BridgeOrchestrator = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Bridge Backend Starting...")
-    logger.info(f"Node.js: {settings.NODE_PATH}")
-    logger.info(f"Gemini CLI: {settings.GEMINI_CLI_PATH}")
-    logger.info(f"Qwen CLI: {settings.QWEN_CLI_PATH}")
+    global registry, session_manager, orchestrator
     
-    node_ok = Path(settings.NODE_PATH).exists()
-    gemini_ok = Path(settings.GEMINI_CLI_PATH).exists()
-    qwen_ok = Path(settings.QWEN_CLI_PATH).exists()
+    logger.info("Bridge Platform Starting...")
     
-    logger.info(f"Status: Node {'OK' if node_ok else 'MISSING'} | Gemini {'OK' if gemini_ok else 'MISSING'} | Qwen {'OK' if qwen_ok else 'MISSING'}")
+    registry = AgentRegistry()
+    session_manager = SessionManager()
+    orchestrator = BridgeOrchestrator(registry=registry)
     
-    if not all([node_ok, gemini_ok, qwen_ok]):
-        logger.warning("Some CLI tools are missing. Update paths in .env or config.py")
+    logger.info(f"Node.js: {registry.node_path or 'Not Found'}")
+    logger.info(f"Discovered {registry.to_dict()['availableCount']} available agents")
+    
+    for agent in registry.get_all_agents():
+        status = "✓" if agent.is_available else "✗"
+        logger.info(f"  {status} {agent.name}: {agent.path or 'Not Found'}")
     
     yield
-    logger.info("Bridge Backend Shutting Down...")
+    
+    logger.info("Bridge Platform Shutting Down...")
 
 
 app = FastAPI(
-    title="Bridge Multi-Agent Backend",
-    description="Real-time WebSocket server for Gemini and Qwen CLI collaboration",
-    version="2.0.0",
+    title="Bridge AI Orchestration Platform",
+    description="Dynamic multi-agent pipeline orchestration with auto-discovery",
+    version="3.0.0",
     lifespan=lifespan
 )
 
@@ -48,21 +60,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-orchestrator = BridgeOrchestrator()
-
 
 class ConnectionManager:
     
     def __init__(self):
-        self.active_connections: list[WebSocket] = []
+        self.active_connections: Dict[str, WebSocket] = {}
     
-    async def connect(self, websocket: WebSocket):
+    async def connect(self, websocket: WebSocket, session_id: str = "default"):
         await websocket.accept()
-        self.active_connections.append(websocket)
+        self.active_connections[session_id] = websocket
     
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
+    def disconnect(self, session_id: str = "default"):
+        if session_id in self.active_connections:
+            del self.active_connections[session_id]
     
     async def send_event(self, websocket: WebSocket, event: BridgeEvent):
         await websocket.send_json(event.model_dump())
@@ -75,11 +85,15 @@ manager = ConnectionManager()
 async def root():
     return {
         "status": "online",
-        "service": "Bridge Multi-Agent Backend",
-        "version": "2.0.0",
-        "mode": "Local CLI Subprocess",
-        "agents": ["Gemini CLI", "Qwen CLI"],
-        "protocol": "Iterative Semantic Refinement"
+        "service": "Bridge AI Orchestration Platform",
+        "version": "3.0.0",
+        "mode": "Dynamic Pipeline Orchestration",
+        "features": [
+            "Auto-discovery of CLI agents",
+            "Dynamic pipeline configuration",
+            "Session management with context",
+            "Real-time streaming"
+        ]
     }
 
 
@@ -87,13 +101,185 @@ async def root():
 async def health():
     return {
         "status": "healthy",
-        "node_path": settings.NODE_PATH,
-        "node_exists": Path(settings.NODE_PATH).exists(),
-        "gemini_cli_exists": Path(settings.GEMINI_CLI_PATH).exists(),
-        "qwen_cli_exists": Path(settings.QWEN_CLI_PATH).exists(),
-        "max_iterations": settings.MAX_ITERATIONS,
+        "registry": registry.to_dict() if registry else None,
+        "activeSessions": len(session_manager.sessions) if session_manager else 0,
         "timeout": settings.SUBPROCESS_TIMEOUT
     }
+
+
+@app.get("/agents/discovered")
+async def get_discovered_agents():
+    if not registry:
+        raise HTTPException(status_code=503, detail="Registry not initialized")
+    
+    return {
+        "nodePath": registry.node_path,
+        "agents": [agent.to_dict() for agent in registry.get_all_agents()],
+        "available": [agent.to_dict() for agent in registry.get_available_agents()],
+        "stats": {
+            "total": len(registry.agents),
+            "available": len(registry.get_available_agents())
+        }
+    }
+
+
+@app.post("/agents/refresh")
+async def refresh_agents():
+    if not registry:
+        raise HTTPException(status_code=503, detail="Registry not initialized")
+    
+    registry.refresh()
+    return {"message": "Agent registry refreshed", "agents": registry.to_dict()}
+
+
+@app.post("/session/new")
+async def create_session(request: SessionCreateRequest):
+    if not session_manager:
+        raise HTTPException(status_code=503, detail="Session manager not initialized")
+    
+    session = session_manager.create_session(
+        name=request.name,
+        pipeline=request.pipeline
+    )
+    return session.to_dict()
+
+
+@app.get("/session/{session_id}")
+async def get_session(session_id: str):
+    if not session_manager:
+        raise HTTPException(status_code=503, detail="Session manager not initialized")
+    
+    session = session_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    return session.to_full_dict()
+
+
+@app.get("/sessions")
+async def list_sessions():
+    if not session_manager:
+        raise HTTPException(status_code=503, detail="Session manager not initialized")
+    
+    return {
+        "sessions": [s.to_dict() for s in session_manager.list_sessions()]
+    }
+
+
+@app.delete("/session/{session_id}")
+async def delete_session(session_id: str):
+    if not session_manager:
+        raise HTTPException(status_code=503, detail="Session manager not initialized")
+    
+    if session_manager.delete_session(session_id):
+        return {"message": "Session deleted"}
+    raise HTTPException(status_code=404, detail="Session not found")
+
+
+@app.put("/session/{session_id}/pipeline")
+async def update_session_pipeline(session_id: str, request: SessionUpdateRequest):
+    if not session_manager:
+        raise HTTPException(status_code=503, detail="Session manager not initialized")
+    
+    session = session_manager.update_pipeline(session_id, request.pipeline)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    return session.to_dict()
+
+
+@app.websocket("/ws/chat/{session_id}")
+async def websocket_chat(websocket: WebSocket, session_id: str):
+    await manager.connect(websocket, session_id)
+    
+    session = session_manager.get_session(session_id)
+    if not session:
+        session = session_manager.create_session(name=f"Session {session_id[:8]}")
+        session_id = session.id
+    
+    try:
+        while True:
+            data = await websocket.receive_json()
+            query = data.get("query", "")
+            pipeline_config = data.get("pipeline")
+            max_iterations = data.get("maxIterations", 1)
+            skip_critique = data.get("skipCritique", False)
+            
+            if not query:
+                await manager.send_event(websocket, BridgeEvent(
+                    agent=AgentType.SYSTEM,
+                    type=EventType.ERROR,
+                    content="Empty query received",
+                    sessionId=session_id
+                ))
+                continue
+            
+            session.add_message(MessageRole.USER, query)
+            
+            context = session.get_context_string()
+            
+            try:
+                if pipeline_config and pipeline_config.get("steps"):
+                    steps = [
+                        PipelineStepConfig(**step) 
+                        for step in pipeline_config["steps"]
+                    ]
+                    
+                    response_content = ""
+                    async for event in orchestrator.run_pipeline(
+                        query=query,
+                        pipeline=steps,
+                        context=context,
+                        max_iterations=pipeline_config.get("maxIterations", max_iterations)
+                    ):
+                        event.sessionId = session_id
+                        await manager.send_event(websocket, event)
+                        if event.type == EventType.TOKEN:
+                            response_content += event.content or ""
+                        if event.type == EventType.STATUS:
+                            await asyncio.sleep(0.05)
+                    
+                    if response_content:
+                        session.add_message(
+                            MessageRole.AGENT,
+                            response_content[:2000],
+                            agent_id="pipeline"
+                        )
+                else:
+                    response_content = ""
+                    async for event in orchestrator.run(
+                        query=query,
+                        max_iterations=max_iterations,
+                        skip_critique=skip_critique,
+                        session_context=context
+                    ):
+                        event.sessionId = session_id
+                        await manager.send_event(websocket, event)
+                        if event.type == EventType.TOKEN:
+                            response_content += event.content or ""
+                        if event.type == EventType.STATUS:
+                            await asyncio.sleep(0.05)
+                    
+                    if response_content:
+                        session.add_message(
+                            MessageRole.AGENT,
+                            response_content[:2000],
+                            agent_id="gemini"
+                        )
+                        
+            except Exception as e:
+                await manager.send_event(websocket, BridgeEvent(
+                    agent=AgentType.SYSTEM,
+                    type=EventType.ERROR,
+                    content=f"Orchestration error: {str(e)}",
+                    sessionId=session_id
+                ))
+                
+    except WebSocketDisconnect:
+        manager.disconnect(session_id)
+    except Exception as e:
+        manager.disconnect(session_id)
+        logger.error(f"WebSocket error: {e}")
 
 
 @app.websocket("/ws/bridge")
@@ -104,6 +290,8 @@ async def websocket_bridge(websocket: WebSocket):
         while True:
             data = await websocket.receive_json()
             query = data.get("query", "")
+            max_iterations = data.get("maxIterations", 1)
+            skip_critique = data.get("skipCritique", False)
             
             if not query:
                 await manager.send_event(websocket, BridgeEvent(
@@ -114,7 +302,11 @@ async def websocket_bridge(websocket: WebSocket):
                 continue
             
             try:
-                async for event in orchestrator.run(query):
+                async for event in orchestrator.run(
+                    query=query,
+                    max_iterations=max_iterations,
+                    skip_critique=skip_critique
+                ):
                     await manager.send_event(websocket, event)
                     if event.type == EventType.STATUS:
                         await asyncio.sleep(0.05)
@@ -126,9 +318,9 @@ async def websocket_bridge(websocket: WebSocket):
                 ))
                 
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        manager.disconnect()
     except Exception as e:
-        manager.disconnect(websocket)
+        manager.disconnect()
         logger.error(f"WebSocket error: {e}")
 
 

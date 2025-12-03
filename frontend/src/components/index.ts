@@ -1,10 +1,9 @@
-export { AgentLane } from './AgentLane';
-export { BackgroundEffects } from './BackgroundEffects';
-export { ChatInterface } from './ChatInterface';
+export { Header } from './Header';
+export { Sidebar } from './Sidebar';
+export { MainChat } from './MainChat';
+export { RightPanel } from './RightPanel';
+export { InputBar } from './InputBar';
+export { MessageBubble } from './MessageBubble';
 export { CodeBlock } from './CodeBlock';
 export { FinalOutput } from './FinalOutput';
-export { Header } from './Header';
-export { InputBar } from './InputBar';
-export { ThinkingIndicator, SkeletonLoader, ProgressBar } from './ThinkingIndicator';
-export { MessageBubble } from './MessageBubble';
-export { SystemLog } from './SystemLog';
+export { ThinkingIndicator } from './ThinkingIndicator';

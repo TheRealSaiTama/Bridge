@@ -1,14 +1,36 @@
 import { useState } from 'react';
-import { motion } from 'framer-motion';
-import { CheckCircle2, Copy, Check, Download } from 'lucide-react';
+import { Check, Copy, CheckCircle2 } from 'lucide-react';
 import { CodeBlock } from './CodeBlock';
 
-interface FinalOutputProps {
+interface Props {
   content: string;
 }
 
-export function FinalOutput({ content }: FinalOutputProps) {
+function extractCodeBlocks(content: string): { type: 'text' | 'code'; content: string; language?: string }[] {
+  const parts: { type: 'text' | 'code'; content: string; language?: string }[] = [];
+  const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
+  
+  let lastIndex = 0;
+  let match;
+  
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push({ type: 'text', content: content.slice(lastIndex, match.index) });
+    }
+    parts.push({ type: 'code', content: match[2], language: match[1] || 'text' });
+    lastIndex = match.index + match[0].length;
+  }
+  
+  if (lastIndex < content.length) {
+    parts.push({ type: 'text', content: content.slice(lastIndex) });
+  }
+  
+  return parts.length > 0 ? parts : [{ type: 'text', content }];
+}
+
+export function FinalOutput({ content }: Props) {
   const [copied, setCopied] = useState(false);
+  const parts = extractCodeBlocks(content);
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(content);
@@ -16,106 +38,50 @@ export function FinalOutput({ content }: FinalOutputProps) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleDownload = () => {
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'bridge-output.txt';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const renderContent = (text: string) => {
-    const parts = text.split(/(```[\s\S]*?```)/g);
-    
-    return parts.map((part, index) => {
-      if (part.startsWith('```')) {
-        const match = part.match(/```(\w+)?\n?([\s\S]*?)```/);
-        if (match) {
-          const language = match[1] || 'text';
-          const code = match[2].trim();
-          return <CodeBlock key={index} code={code} language={language} />;
-        }
-      }
-      return (
-        <span key={index} className="whitespace-pre-wrap">
-          {formatText(part)}
-        </span>
-      );
-    });
-  };
-
   return (
-    <motion.div
-      className="rounded-lg border-2 border-green-200 bg-green-50 overflow-hidden"
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2 }}
-    >
-      <div className="flex items-center justify-between px-4 py-3 bg-green-100 border-b border-green-200">
+    <div className="rounded-xl border-2 border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 bg-emerald-100/50 dark:bg-emerald-900/30 border-b border-emerald-200 dark:border-emerald-800">
         <div className="flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4 text-green-600" />
-          <div>
-            <h3 className="font-medium text-sm text-green-800">
-              Final Output
-            </h3>
-            <p className="text-[10px] text-green-600">
-              Consensus achieved
-            </p>
-          </div>
+          <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+          <span className="font-medium text-emerald-700 dark:text-emerald-300">Final Output</span>
         </div>
         
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleCopy}
-            className="flex items-center gap-1.5 px-2 py-1 rounded text-xs text-green-700 hover:bg-green-200 transition-colors"
-          >
-            {copied ? (
-              <>
-                <Check className="w-3.5 h-3.5" />
-                <span>Copied</span>
-              </>
-            ) : (
-              <>
-                <Copy className="w-3.5 h-3.5" />
-                <span>Copy</span>
-              </>
-            )}
-          </button>
-          
-          <button
-            onClick={handleDownload}
-            className="flex items-center gap-1.5 px-2 py-1 rounded text-xs text-green-700 hover:bg-green-200 transition-colors"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Export</span>
-          </button>
-        </div>
+        <button
+          onClick={handleCopy}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-white dark:bg-zinc-800 rounded-lg hover:bg-emerald-100 dark:hover:bg-zinc-700 transition-colors border border-emerald-200 dark:border-zinc-700"
+        >
+          {copied ? (
+            <>
+              <Check className="w-4 h-4 text-emerald-500" />
+              <span className="text-emerald-600">Copied!</span>
+            </>
+          ) : (
+            <>
+              <Copy className="w-4 h-4 text-zinc-500" />
+              <span>Copy All</span>
+            </>
+          )}
+        </button>
       </div>
       
-      <div className="p-4 max-h-[50vh] overflow-auto bg-white">
-        <div className="text-sm text-zinc-700 leading-relaxed">
-          {renderContent(content)}
-        </div>
+      <div className="p-4">
+        {parts.map((part, idx) => 
+          part.type === 'code' ? (
+            <CodeBlock 
+              key={idx} 
+              code={part.content} 
+              language={part.language} 
+            />
+          ) : (
+            <div 
+              key={idx} 
+              className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap leading-relaxed"
+            >
+              {part.content}
+            </div>
+          )
+        )}
       </div>
-    </motion.div>
+    </div>
   );
-}
-
-function formatText(text: string): React.ReactNode {
-  const lines = text.split('\n');
-  
-  return lines.map((line, i) => {
-    let formatted = line;
-    formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-zinc-900">$1</strong>');
-    formatted = formatted.replace(/`([^`]+)`/g, '<code class="px-1 py-0.5 rounded bg-zinc-100 text-zinc-800 font-mono text-xs">$1</code>');
-    
-    return (
-      <span key={i}>
-        <span dangerouslySetInnerHTML={{ __html: formatted }} />
-        {i < lines.length - 1 && <br />}
-      </span>
-    );
-  });
 }
